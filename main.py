@@ -253,7 +253,7 @@ async def send_book(chat_id: int, book: dict):
 
 @dp.message(Command("update"))
 async def cmd_update(message: types.Message):
-    if message.from_user.id != OWNER_ID:
+    if OWNER_ID and message.from_user.id != OWNER_ID:
         await message.answer("❌ الأمر متاح للمالك فقط")
         return
     await message.answer("🔄 جاري تحديث قاعدة البيانات من Archive.org... قد يستغرق دقائق")
