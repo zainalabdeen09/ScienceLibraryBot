@@ -10,6 +10,8 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFil
 
 from books_db import BOOKS_DB, search_db, get_branch_books
 
+OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
+
 logging.basicConfig(level=logging.INFO)
 
 TOKEN = os.environ.get("BOT_TOKEN", "8795744717:AAH-fAbRJGn84lCRIZpBj9T4-4rzpnYIsX0")
@@ -191,35 +193,56 @@ async def send_book(chat_id: int, book: dict):
     except Exception as e:
         logging.warning(f"IA metadata fail for {ia_id}: {e}")
 
+    MAX_SIZE = 48 * 1024 * 1024
+
     # Step 2: Try downloading from archive.org and sending
-    tried = []
     for pdf_name in pdf_names:
         url = f"https://archive.org/download/{ia_id}/{pdf_name}"
-        tried.append(pdf_name)
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=90)) as resp:
-                    if resp.status == 200:
-                        content = await resp.read()
-                        if len(content) > 50000:
-                            safe_name = f"{ia_id}.pdf"
-                            tmp = os.path.join(tempfile.gettempdir(), safe_name)
-                            with open(tmp, "wb") as f:
-                                f.write(content)
-                            inp = FSInputFile(tmp, filename=safe_name)
-                            await bot.send_document(chat_id, inp, caption=caption, parse_mode="HTML")
-                            os.unlink(tmp)
-                            logging.info(f"Sent: {url}")
-                            return
+                    if resp.status != 200:
+                        continue
+                    length = resp.content_length
+                    if length and length > MAX_SIZE:
+                        logging.info(f"Skip {pdf_name}: {length} bytes > 48MB")
+                        continue
+                    content = await resp.read()
+                    if len(content) < 50000:
+                        continue
+                    if len(content) > MAX_SIZE:
+                        logging.info(f"Skip {pdf_name}: downloaded {len(content)} bytes > 48MB")
+                        continue
+                    safe_name = f"{ia_id}.pdf"
+                    tmp = os.path.join(tempfile.gettempdir(), safe_name)
+                    with open(tmp, "wb") as f:
+                        f.write(content)
+                    inp = FSInputFile(tmp, filename=safe_name)
+                    await bot.send_document(chat_id, inp, caption=caption, parse_mode="HTML")
+                    os.unlink(tmp)
+                    logging.info(f"Sent: {url}")
+                    return
         except Exception as e:
             logging.warning(f"DL fail {pdf_name}: {e}")
             continue
 
-    # Step 3: Fallback - show link
+    # Step 3: Try URL-based send for small files (<20MB)
+    for url in [
+        f"https://archive.org/download/{ia_id}/{ia_id}.pdf",
+        f"https://archive.org/download/{ia_id}/{ia_id}_text.pdf",
+    ]:
+        try:
+            await bot.send_document(chat_id, document=url, caption=caption, parse_mode="HTML")
+            logging.info(f"Sent via URL: {url}")
+            return
+        except Exception:
+            pass
+
+    # Step 4: Fallback - show link
     link = f"https://archive.org/details/{ia_id}"
     await bot.send_message(
         chat_id,
-        f"⚠️ تعذر إرسال الملف مباشرة\n📎 الرابط:\n{link}",
+        f"⚠️ الملف كبير جداً (أكثر من 50MB)\n📎 الرابط:\n{link}",
         disable_web_page_preview=True,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📂 فتح الرابط", url=link)],
@@ -227,6 +250,29 @@ async def send_book(chat_id: int, book: dict):
         ]),
     )
 
+
+@dp.message(Command("update"))
+async def cmd_update(message: types.Message):
+    if message.from_user.id != OWNER_ID:
+        await message.answer("❌ الأمر متاح للمالك فقط")
+        return
+    await message.answer("🔄 جاري تحديث قاعدة البيانات من Archive.org... قد يستغرق دقائق")
+    try:
+        from discover_books import discover_and_save
+        import books_db
+        stats = await discover_and_save()
+        books_db.reload_from_json()
+        import sys
+        this = sys.modules[__name__]
+        this.BOOKS_DB = books_db.BOOKS_DB
+        total = sum(len(v) for v in BOOKS_DB.values())
+        msg = f"✅ تم التحديث!\n📚 إجمالي الكتب: {total}\n"
+        for k, v in stats.items():
+            msg += f"• {k}: {v} كتب\n"
+        await message.answer(msg)
+    except Exception as e:
+        await message.answer(f"❌ فشل التحديث: {e}")
+        logging.exception("Update failed")
 
 @dp.message(Command("search"))
 async def cmd_search(message: types.Message):
