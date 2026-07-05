@@ -174,65 +174,53 @@ async def send_book(chat_id: int, book: dict):
 
     caption = f"<b>{book['title']}</b>\n👤 {book['author']}\n📦 {book['size']} | {book['year']}"
 
-    errors = []
+    # Step 1: Find real PDF filenames via IA metadata API
+    pdf_names = [f"{ia_id}.pdf", f"{ia_id}_text.pdf"]
+    try:
+        async with aiohttp.ClientSession() as session:
+            meta_url = f"https://archive.org/metadata/{ia_id}"
+            async with session.get(meta_url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                if resp.status == 200:
+                    import json
+                    meta = await resp.json()
+                    files = meta.get("files", [])
+                    found = [f["name"] for f in files if f.get("name", "").lower().endswith(".pdf")]
+                    if found:
+                        pdf_names = found
+                        logging.info(f"IA '{ia_id}': found PDFs {found[:3]}")
+    except Exception as e:
+        logging.warning(f"IA metadata fail for {ia_id}: {e}")
 
-    # Try 1: Telegram API downloads - sends directly as document
-    for url in [
-        f"https://archive.org/download/{ia_id}/{ia_id}.pdf",
-        f"https://archive.org/download/{ia_id}/{ia_id}_text.pdf",
-    ]:
-        try:
-            await bot.send_document(chat_id, document=url, caption=caption, parse_mode="HTML")
-            logging.info(f"Sent via URL: {url}")
-            return
-        except Exception as e:
-            errors.append(str(e)[:80])
-            logging.warning(f"URL fail: {e}")
-
-    # Try 2: LibreTexts API (if the book has a libre_id)
-    libre_id = book.get("libre_id", "")
-    if libre_id:
-        for fmt in [".pdf", ""]:
-            libre_url = f"https://chem.libretexts.org/@api/deki/pages/{libre_id}/pdf/{fmt}"
-            try:
-                await bot.send_document(chat_id, document=libre_url, caption=caption, parse_mode="HTML")
-                logging.info(f"Sent via Libre: {libre_url}")
-                return
-            except Exception as e:
-                errors.append(str(e)[:80])
-                continue
-
-    # Try 3: Download locally and send
-    for url in [
-        f"https://archive.org/download/{ia_id}/{ia_id}.pdf",
-        f"https://archive.org/download/{ia_id}/{ia_id}_text.pdf",
-    ]:
+    # Step 2: Try downloading from archive.org and sending
+    tried = []
+    for pdf_name in pdf_names:
+        url = f"https://archive.org/download/{ia_id}/{pdf_name}"
+        tried.append(pdf_name)
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=90)) as resp:
                     if resp.status == 200:
                         content = await resp.read()
-                        if len(content) > 10000:
-                            tmp = os.path.join(tempfile.gettempdir(), f"{ia_id}.pdf")
+                        if len(content) > 50000:
+                            safe_name = f"{ia_id}.pdf"
+                            tmp = os.path.join(tempfile.gettempdir(), safe_name)
                             with open(tmp, "wb") as f:
                                 f.write(content)
-                            inp = FSInputFile(tmp, filename=f"{ia_id}.pdf")
+                            inp = FSInputFile(tmp, filename=safe_name)
                             await bot.send_document(chat_id, inp, caption=caption, parse_mode="HTML")
                             os.unlink(tmp)
-                            logging.info(f"Sent via local: {url}")
+                            logging.info(f"Sent: {url}")
                             return
         except Exception as e:
-            errors.append(f"local: {str(e)[:60]}")
+            logging.warning(f"DL fail {pdf_name}: {e}")
             continue
 
+    # Step 3: Fallback - show link
     link = f"https://archive.org/details/{ia_id}"
-    error_lines = [e for e in errors if "200" not in e][:3]
-    err_text = "\n".join(error_lines) if error_lines else "غير معروف"
     await bot.send_message(
         chat_id,
-        f"⚠️ تعذر إرسال الملف مباشرة\n📎 الرابط:\n{link}\n\n<code>{err_text}</code>",
+        f"⚠️ تعذر إرسال الملف مباشرة\n📎 الرابط:\n{link}",
         disable_web_page_preview=True,
-        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📂 فتح الرابط", url=link)],
             [InlineKeyboardButton(text="🔙 القائمة", callback_data="bk_main")],
