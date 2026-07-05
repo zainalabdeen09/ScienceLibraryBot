@@ -49,9 +49,28 @@ async def verify_pdf(identifier):
                     return None
                 meta = await r.json()
                 files = meta.get("files", [])
-                pdfs = [f["name"] for f in files if f.get("name", "").lower().endswith(".pdf")]
-                if pdfs:
-                    return pdfs
+                # Find non-encrypted PDFs under 48MB
+                MAX = 48 * 1024 * 1024
+                good = []
+                for f in files:
+                    name = f.get("name", "").lower()
+                    if not name.endswith(".pdf"):
+                        continue
+                    if "encrypted" in name:
+                        continue
+                    try:
+                        sz = int(f.get("size", 0))
+                    except:
+                        sz = 0
+                    if 50000 < sz < MAX:
+                        good.append(f["name"])
+                if good:
+                    return good  # sorted by preference
+                # Fallback: any non-encrypted PDF
+                any_non_enc = [f["name"] for f in files
+                               if f.get("name", "").lower().endswith(".pdf")
+                               and "encrypted" not in f.get("name", "").lower()]
+                return any_non_enc or None
         except:
             pass
     return None

@@ -186,10 +186,19 @@ async def send_book(chat_id: int, book: dict):
                     import json
                     meta = await resp.json()
                     files = meta.get("files", [])
-                    found = [f["name"] for f in files if f.get("name", "").lower().endswith(".pdf")]
-                    if found:
-                        pdf_names = found
-                        logging.info(f"IA '{ia_id}': found PDFs {found[:3]}")
+                    all_pdfs = []
+                    for f in files:
+                        n = f.get("name", "")
+                        if n.lower().endswith(".pdf") and "encrypted" not in n.lower():
+                            all_pdfs.append(n)
+                    # Prefer smaller PDFs (check size from metadata)
+                    def _sort_key(n):
+                        try: return int(next((f2.get("size", 0) for f2 in files if f2.get("name")==n), 0))
+                        except: return 0
+                    all_pdfs.sort(key=_sort_key)
+                    if all_pdfs:
+                        pdf_names = all_pdfs
+                        logging.info(f"IA '{ia_id}': PDFs {all_pdfs[:3]}")
     except Exception as e:
         logging.warning(f"IA metadata fail for {ia_id}: {e}")
 
