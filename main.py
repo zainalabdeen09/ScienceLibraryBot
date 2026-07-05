@@ -202,25 +202,15 @@ async def send_book(chat_id: int, book: dict):
     except Exception as e:
         logging.warning(f"IA metadata fail for {ia_id}: {e}")
 
-    MAX_SIZE = 48 * 1024 * 1024
-
-    # Step 2: Try downloading from archive.org and sending
     for pdf_name in pdf_names:
         url = f"https://archive.org/download/{ia_id}/{pdf_name}"
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=90)) as resp:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=120)) as resp:
                     if resp.status != 200:
-                        continue
-                    length = resp.content_length
-                    if length and length > MAX_SIZE:
-                        logging.info(f"Skip {pdf_name}: {length} bytes > 48MB")
                         continue
                     content = await resp.read()
                     if len(content) < 50000:
-                        continue
-                    if len(content) > MAX_SIZE:
-                        logging.info(f"Skip {pdf_name}: downloaded {len(content)} bytes > 48MB")
                         continue
                     safe_name = f"{ia_id}.pdf"
                     tmp = os.path.join(tempfile.gettempdir(), safe_name)
@@ -235,23 +225,10 @@ async def send_book(chat_id: int, book: dict):
             logging.warning(f"DL fail {pdf_name}: {e}")
             continue
 
-    # Step 3: Try URL-based send for small files (<20MB)
-    for url in [
-        f"https://archive.org/download/{ia_id}/{ia_id}.pdf",
-        f"https://archive.org/download/{ia_id}/{ia_id}_text.pdf",
-    ]:
-        try:
-            await bot.send_document(chat_id, document=url, caption=caption, parse_mode="HTML")
-            logging.info(f"Sent via URL: {url}")
-            return
-        except Exception:
-            pass
-
-    # Step 4: Fallback - show link
     link = f"https://archive.org/details/{ia_id}"
     await bot.send_message(
         chat_id,
-        f"⚠️ الملف كبير جداً (أكثر من 50MB)\n📎 الرابط:\n{link}",
+        f"📎 رابط الكتاب:\n{link}",
         disable_web_page_preview=True,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📂 فتح الرابط", url=link)],
@@ -273,7 +250,7 @@ async def cmd_update(message: types.Message):
 
             all_books = {}
             for branch_name, subject_q in BRANCHES:
-                await bot.edit_message_text(f"🔄 البحث في {branch_name}...", chat_id, msg_id)
+                await bot.edit_message_text(text=f"🔄 البحث في {branch_name}...", chat_id=chat_id, message_id=msg_id)
                 docs = await search_ia(subject_q, max_rows=200)
                 branch_books = []
                 for i, d in enumerate(docs):
