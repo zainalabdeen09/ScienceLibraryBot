@@ -256,23 +256,60 @@ async def cmd_update(message: types.Message):
     if OWNER_ID and message.from_user.id != OWNER_ID:
         await message.answer("❌ الأمر متاح للمالك فقط")
         return
-    await message.answer("🔄 جاري تحديث قاعدة البيانات من Archive.org... قد يستغرق دقائق")
-    try:
-        from discover_books import discover_and_save
-        import books_db
-        stats = await discover_and_save()
-        books_db.reload_from_json()
-        import sys
-        this = sys.modules[__name__]
-        this.BOOKS_DB = books_db.BOOKS_DB
-        total = sum(len(v) for v in BOOKS_DB.values())
-        msg = f"✅ تم التحديث!\n📚 إجمالي الكتب: {total}\n"
-        for k, v in stats.items():
-            msg += f"• {k}: {v} كتب\n"
-        await message.answer(msg)
-    except Exception as e:
-        await message.answer(f"❌ فشل التحديث: {e}")
-        logging.exception("Update failed")
+
+    async def run_discovery(chat_id, msg_id):
+        try:
+            from discover_books import BRANCHES, search_ia, verify_pdf
+            import books_db, json, os
+
+            all_books = {}
+            for branch_name, subject_q in BRANCHES:
+                await bot.edit_message_text(f"🔄 البحث في {branch_name}...", chat_id, msg_id)
+                docs = await search_ia(subject_q, max_rows=200)
+                branch_books = []
+                for i, d in enumerate(docs):
+                    ident = d.get("identifier", "")
+                    if not ident:
+                        continue
+                    pdfs = await verify_pdf(ident)
+                    if pdfs:
+                        branch_books.append({
+                            "ia_id": ident,
+                            "title": (d.get("title") or "Unknown")[:80],
+                            "author": (d.get("creator") or "Unknown")[:50],
+                            "year": str(d.get("year") or ""),
+                            "size": f"{d.get('downloads', 0)} downloads",
+                        })
+                    if i % 10 == 0 and not branch_books:
+                        await bot.edit_message_text(f"🔄 {branch_name}: بحث... ({i}/{len(docs)})", chat_id, msg_id)
+                    if len(branch_books) >= 50:
+                        break
+                all_books[branch_name] = branch_books
+                await bot.edit_message_text(f"✅ {branch_name}: {len(branch_books)} كتاب", chat_id, msg_id)
+
+            json_path = os.path.join(os.path.dirname(__file__), "books_db.json")
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(all_books, f, ensure_ascii=False, indent=2)
+
+            books_db.reload_from_json()
+
+            total = sum(len(v) for v in all_books.values())
+            msg = f"✅ تم التحديث!\n📚 إجمالي الكتب: {total}\n"
+            for k, v in all_books.items():
+                msg += f"• {k}: {v} كتب\n"
+            await bot.edit_message_text(msg, chat_id, msg_id)
+            import sys
+            sys.modules[__name__].BOOKS_DB = books_db.BOOKS_DB
+        except Exception as e:
+            try:
+                await bot.edit_message_text(f"❌ فشل التحديث: {e}", chat_id, msg_id)
+            except:
+                pass
+            logging.exception("Update failed")
+
+    sent = await message.answer("🔄 بدء التحديث...")
+    asyncio.create_task(run_discovery(message.chat.id, sent.message_id))
+    await message.answer("✅ التحديث شغال في الخلفية. راح أرسل لك النتيجة لما يخلص.")
 
 @dp.message(Command("search"))
 async def cmd_search(message: types.Message):
