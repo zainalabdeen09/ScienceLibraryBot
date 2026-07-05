@@ -209,6 +209,9 @@ async def send_book(chat_id: int, book: dict):
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=120)) as resp:
                     if resp.status != 200:
                         continue
+                    if resp.content_length and resp.content_length > 50 * 1024 * 1024:
+                        logging.info(f"Skip {pdf_name}: {resp.content_length} bytes > 50MB")
+                        continue
                     content = await resp.read()
                     if len(content) < 50000:
                         continue
@@ -267,11 +270,11 @@ async def cmd_update(message: types.Message):
                             "size": f"{d.get('downloads', 0)} downloads",
                         })
                     if i % 10 == 0 and not branch_books:
-                        await bot.edit_message_text(f"🔄 {branch_name}: بحث... ({i}/{len(docs)})", chat_id, msg_id)
+                        await bot.edit_message_text(text=f"🔄 {branch_name}: بحث... ({i}/{len(docs)})", chat_id=chat_id, message_id=msg_id)
                     if len(branch_books) >= 50:
                         break
                 all_books[branch_name] = branch_books
-                await bot.edit_message_text(f"✅ {branch_name}: {len(branch_books)} كتاب", chat_id, msg_id)
+                await bot.edit_message_text(text=f"✅ {branch_name}: {len(branch_books)} كتاب", chat_id=chat_id, message_id=msg_id)
 
             json_path = os.path.join(os.path.dirname(__file__), "books_db.json")
             with open(json_path, "w", encoding="utf-8") as f:
@@ -283,12 +286,12 @@ async def cmd_update(message: types.Message):
             msg = f"✅ تم التحديث!\n📚 إجمالي الكتب: {total}\n"
             for k, v in all_books.items():
                 msg += f"• {k}: {v} كتب\n"
-            await bot.edit_message_text(msg, chat_id, msg_id)
+            await bot.edit_message_text(text=msg, chat_id=chat_id, message_id=msg_id)
             import sys
             sys.modules[__name__].BOOKS_DB = books_db.BOOKS_DB
         except Exception as e:
             try:
-                await bot.edit_message_text(f"❌ فشل التحديث: {e}", chat_id, msg_id)
+                await bot.edit_message_text(text=f"❌ فشل التحديث: {e}", chat_id=chat_id, message_id=msg_id)
             except:
                 pass
             logging.exception("Update failed")
